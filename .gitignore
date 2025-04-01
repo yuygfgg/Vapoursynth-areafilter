@@ -3,3 +3,4 @@
 .cache/*
 .logs/*
 .vscode/*
+build/*
