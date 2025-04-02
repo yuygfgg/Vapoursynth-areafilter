@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <vector>
 #include <algorithm>
-#include <optional>
 #include <type_traits>
 #include "VapourSynth4.h"
 #include "VSHelper4.h"
@@ -13,9 +12,9 @@ struct ComponentStats {
     std::vector<int> component_sizes;
 };
 
-typedef ComponentStats (*ProcessPlaneFn_uint8)(const uint8_t*, uint8_t*, int, int, ptrdiff_t, ptrdiff_t, int, uint8_t, std::optional<float>);
-typedef ComponentStats (*ProcessPlaneFn_uint16)(const uint16_t*, uint16_t*, int, int, ptrdiff_t, ptrdiff_t, int, uint16_t, std::optional<float>);
-typedef ComponentStats (*ProcessPlaneFn_float)(const float*, float*, int, int, ptrdiff_t, ptrdiff_t, int, float, std::optional<float>);
+typedef ComponentStats (*ProcessPlaneFn_uint8)(const uint8_t*, uint8_t*, int, int, ptrdiff_t, ptrdiff_t, int, uint8_t, float);
+typedef ComponentStats (*ProcessPlaneFn_uint16)(const uint16_t*, uint16_t*, int, int, ptrdiff_t, ptrdiff_t, int, uint16_t, float);
+typedef ComponentStats (*ProcessPlaneFn_float)(const float*, float*, int, int, ptrdiff_t, ptrdiff_t, int, float, float);
 
 typedef struct {
     VSNode *node;
@@ -98,8 +97,8 @@ struct NeighborhoodTraits<false> {
     static constexpr auto count = FOUR_NEIGHBORS_COUNT;
 };
 
-template<bool use_8_neighbors, typename T>
-static inline ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) noexcept {
+template<bool use_8_neighbors, bool use_percentage, typename T>
+static inline auto processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, float percentage = 0.0f) noexcept {
     auto src_stride_elements = src_stride / sizeof(T);
     auto dst_stride_elements = dst_stride / sizeof(T);
         
@@ -138,8 +137,7 @@ static inline ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_R
     
             if (min_label == 0) {
                 labels[y * width + x] = next_label++;
-            } 
-            else {
+            } else {
                 labels[y * width + x] = min_label;
                 
                 for (auto nl : valid_neighbors) {
@@ -197,24 +195,24 @@ static inline ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_R
     
     auto size_threshold = 0;
     
-    if (keep_percentage.has_value() && !non_zero_sizes.empty()) {
-        auto percentage = keep_percentage.value();
-        
-        std::sort(non_zero_sizes.begin(), non_zero_sizes.end(), std::greater<int>());
-        
-        int64_t total_area = 0;
-        for (auto size : non_zero_sizes) {
-            total_area += size;
-        }
-        
-        auto area_to_keep = static_cast<int64_t>(total_area * percentage / 100.0f);
-        int64_t current_area = 0;
-        
-        for (auto size : non_zero_sizes) {
-            current_area += size;
-            size_threshold = size;
-            if (current_area >= area_to_keep) {
-                break;
+    if constexpr (use_percentage) {
+        if (!non_zero_sizes.empty()) {
+            std::sort(non_zero_sizes.begin(), non_zero_sizes.end(), std::greater<int>());
+            
+            auto total_area = 0ll;
+            for (auto size : non_zero_sizes) {
+                total_area += size;
+            }
+            
+            auto area_to_keep = static_cast<int64_t>(total_area * percentage / 100.0f);
+            auto current_area = 0ll;
+            
+            for (auto size : non_zero_sizes) {
+                current_area += size;
+                size_threshold = size;
+                if (current_area >= area_to_keep) {
+                    break;
+                }
             }
         }
     }
@@ -226,7 +224,7 @@ static inline ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_R
                 auto component_size = component_sizes[ds.find(label)];
                 auto keep = false;
                 
-                if (keep_percentage.has_value()) {
+                if constexpr (use_percentage) {
                     keep = (component_size >= size_threshold);
                 } else {
                     keep = (component_size >= min_area);
@@ -240,16 +238,6 @@ static inline ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_R
     }
     
     return stats;
-}
-
-template<typename T>
-static inline ComponentStats processPlane8(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) noexcept {
-    return processPlaneImpl<true>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
-}
-
-template<typename T>
-static inline ComponentStats processPlane4(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) noexcept {
-    return processPlaneImpl<false>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
 }
 
 static inline const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) noexcept {
@@ -280,31 +268,13 @@ static inline const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReaso
             
             if (fi->sampleType == stInteger) {
                 if (fi->bitsPerSample == 8) {
-                    stats = d->process_plane_fn_uint8(
-                        static_cast<const uint8_t*>(srcp),
-                        static_cast<uint8_t*>(dstp),
-                        plane_width, plane_height, src_stride, dst_stride,
-                        d->min_area, static_cast<uint8_t>(255),
-                        std::nullopt
-                    );
+                    stats = d->process_plane_fn_uint8(static_cast<const uint8_t*>(srcp), static_cast<uint8_t*>(dstp), plane_width, plane_height, src_stride, dst_stride, d->min_area, 255, 0.0f);
                 } else {
                     auto max_value = static_cast<uint16_t>((1 << fi->bitsPerSample) - 1);
-                    stats = d->process_plane_fn_uint16(
-                        static_cast<const uint16_t*>(srcp),
-                        static_cast<uint16_t*>(dstp),
-                        plane_width, plane_height, src_stride, dst_stride,
-                        d->min_area, max_value,
-                        std::nullopt
-                    );
+                    stats = d->process_plane_fn_uint16(static_cast<const uint16_t*>(srcp), static_cast<uint16_t*>(dstp), plane_width, plane_height, src_stride, dst_stride, d->min_area, max_value, 0.0f);
                 }
             } else if (fi->sampleType == stFloat) {
-                stats = d->process_plane_fn_float(
-                    static_cast<const float*>(srcp),
-                    static_cast<float*>(dstp),
-                    plane_width, plane_height, src_stride, dst_stride,
-                    d->min_area, 1.0f,
-                    std::nullopt
-                );
+                stats = d->process_plane_fn_float(static_cast<const float*>(srcp), static_cast<float*>(dstp), plane_width, plane_height, src_stride, dst_stride, d->min_area, 1.0f, 0.0f);
             }
             
             plane_stats.push_back(stats);
@@ -357,31 +327,13 @@ static inline const VSFrame *VS_CC relFilterGetFrame(int n, int activationReason
             
             if (fi->sampleType == stInteger) {
                 if (fi->bitsPerSample == 8) {
-                    stats = d->process_plane_fn_uint8(
-                        static_cast<const uint8_t*>(srcp),
-                        static_cast<uint8_t*>(dstp),
-                        plane_width, plane_height, src_stride, dst_stride,
-                        0, static_cast<uint8_t>(255),
-                        d->percentage
-                    );
+                    stats = d->process_plane_fn_uint8(static_cast<const uint8_t*>(srcp), static_cast<uint8_t*>(dstp), plane_width, plane_height, src_stride, dst_stride, 0, 255, d->percentage);
                 } else {
                     auto max_value = static_cast<uint16_t>((1 << fi->bitsPerSample) - 1);
-                    stats = d->process_plane_fn_uint16(
-                        static_cast<const uint16_t*>(srcp),
-                        static_cast<uint16_t*>(dstp),
-                        plane_width, plane_height, src_stride, dst_stride,
-                        0, max_value,
-                        d->percentage
-                    );
+                    stats = d->process_plane_fn_uint16(static_cast<const uint16_t*>(srcp), static_cast<uint16_t*>(dstp), plane_width, plane_height, src_stride, dst_stride, 0, max_value, d->percentage);
                 }
             } else if (fi->sampleType == stFloat) {
-                stats = d->process_plane_fn_float(
-                    static_cast<const float*>(srcp),
-                    static_cast<float*>(dstp),
-                    plane_width, plane_height, src_stride, dst_stride,
-                    0, 1.0f,
-                    d->percentage
-                );
+                stats = d->process_plane_fn_float(static_cast<const float*>(srcp), static_cast<float*>(dstp), plane_width, plane_height, src_stride, dst_stride, 0, 1.0f, d->percentage);
             }
             
             plane_stats.push_back(stats);
@@ -412,7 +364,7 @@ static inline auto VS_CC areaFilterFree(void *instanceData, [[maybe_unused]] VSC
     free(d);
 }
 
-static inline auto VS_CC relFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi)noexcept  {
+static inline auto VS_CC relFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi) noexcept  {
     auto d = static_cast<RelFilterData*>(instanceData);
     vsapi->freeNode(d->node);
     free(d);
@@ -473,13 +425,13 @@ static inline auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_u
         use_8_neighbors = false;
     
     if (use_8_neighbors) {
-        d.process_plane_fn_uint8 = processPlane8<uint8_t>;
-        d.process_plane_fn_uint16 = processPlane8<uint16_t>;
-        d.process_plane_fn_float = processPlane8<float>;
+        d.process_plane_fn_uint8 = processPlane<true, false, uint8_t>;
+        d.process_plane_fn_uint16 = processPlane<true, false, uint16_t>;
+        d.process_plane_fn_float = processPlane<true, false,float>;
     } else {
-        d.process_plane_fn_uint8 = processPlane4<uint8_t>;
-        d.process_plane_fn_uint16 = processPlane4<uint16_t>;
-        d.process_plane_fn_float = processPlane4<float>;
+        d.process_plane_fn_uint8 = processPlane<false, false, uint8_t>;
+        d.process_plane_fn_uint16 = processPlane<false, false, uint16_t>;
+        d.process_plane_fn_float = processPlane<false, false, float>;
     }
 
     data = static_cast<AreaFilterData*>(malloc(sizeof(d)));
@@ -516,13 +468,13 @@ static inline auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_un
         use_8_neighbors = false;
     
     if (use_8_neighbors) {
-        d.process_plane_fn_uint8 = processPlane8<uint8_t>;
-        d.process_plane_fn_uint16 = processPlane8<uint16_t>;
-        d.process_plane_fn_float = processPlane8<float>;
+        d.process_plane_fn_uint8 = processPlane<true, true, uint8_t>;
+        d.process_plane_fn_uint16 = processPlane<true, true, uint16_t>;
+        d.process_plane_fn_float = processPlane<true, true, float>;
     } else {
-        d.process_plane_fn_uint8 = processPlane4<uint8_t>;
-        d.process_plane_fn_uint16 = processPlane4<uint16_t>;
-        d.process_plane_fn_float = processPlane4<float>;
+        d.process_plane_fn_uint8 = processPlane<false, true, uint8_t>;
+        d.process_plane_fn_uint16 = processPlane<false, true, uint16_t>;
+        d.process_plane_fn_float = processPlane<false, true, float>;
     }
 
     data = static_cast<RelFilterData*>(malloc(sizeof(d)));
