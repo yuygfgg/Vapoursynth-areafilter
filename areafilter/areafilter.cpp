@@ -6,16 +6,30 @@
 #include "VapourSynth4.h"
 #include "VSHelper4.h"
 
+struct ComponentStats {
+    int component_count;
+    std::vector<int> size_percentiles;
+    std::vector<int> component_sizes;
+};
+
+typedef ComponentStats (*ProcessPlaneFn_uint8)(const uint8_t*, uint8_t*, int, int, ptrdiff_t, ptrdiff_t, int, uint8_t, std::optional<float>);
+typedef ComponentStats (*ProcessPlaneFn_uint16)(const uint16_t*, uint16_t*, int, int, ptrdiff_t, ptrdiff_t, int, uint16_t, std::optional<float>);
+typedef ComponentStats (*ProcessPlaneFn_float)(const float*, float*, int, int, ptrdiff_t, ptrdiff_t, int, float, std::optional<float>);
+
 typedef struct {
     VSNode *node;
     int min_area;
-    bool use_8_neighbors;
+    ProcessPlaneFn_uint8 process_plane_fn_uint8;
+    ProcessPlaneFn_uint16 process_plane_fn_uint16;
+    ProcessPlaneFn_float process_plane_fn_float;
 } AreaFilterData;
 
 typedef struct {
     VSNode *node;
     float percentage;
-    bool use_8_neighbors;
+    ProcessPlaneFn_uint8 process_plane_fn_uint8;
+    ProcessPlaneFn_uint16 process_plane_fn_uint16;
+    ProcessPlaneFn_float process_plane_fn_float;
 } RelFilterData;
 
 class DisjointSet {
@@ -52,11 +66,6 @@ public:
         }
     }
     auto getSize(int x) { return size[find(x)]; }
-};
-struct ComponentStats {
-    int component_count;
-    std::vector<int> size_percentiles;
-    std::vector<int> component_sizes;
 };
 
 struct NeighborOffset { int dy, dx; };
@@ -233,12 +242,13 @@ static ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_RESTRICT
 }
 
 template<typename T>
-static ComponentStats processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, bool use_8_neighbors, std::optional<float> keep_percentage = std::nullopt) {
-    if (use_8_neighbors) {
-        return processPlaneImpl<true>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
-    } else {
-        return processPlaneImpl<false>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
-    }
+static ComponentStats processPlane8(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) {
+    return processPlaneImpl<true>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
+}
+
+template<typename T>
+static ComponentStats processPlane4(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) {
+    return processPlaneImpl<false>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
 }
 
 static const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
@@ -269,27 +279,30 @@ static const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void
             
             if (fi->sampleType == stInteger) {
                 if (fi->bitsPerSample == 8) {
-                    stats = processPlane<uint8_t>(
+                    stats = d->process_plane_fn_uint8(
                         static_cast<const uint8_t*>(srcp),
                         static_cast<uint8_t*>(dstp),
                         plane_width, plane_height, src_stride, dst_stride,
-                        d->min_area, static_cast<uint8_t>(255), d->use_8_neighbors
+                        d->min_area, static_cast<uint8_t>(255),
+                        std::nullopt
                     );
-                } else{
+                } else {
                     auto max_value = static_cast<uint16_t>((1 << fi->bitsPerSample) - 1);
-                    stats = processPlane<uint16_t>(
+                    stats = d->process_plane_fn_uint16(
                         static_cast<const uint16_t*>(srcp),
                         static_cast<uint16_t*>(dstp),
                         plane_width, plane_height, src_stride, dst_stride,
-                        d->min_area, max_value, d->use_8_neighbors
+                        d->min_area, max_value,
+                        std::nullopt
                     );
                 }
             } else if (fi->sampleType == stFloat) {
-                stats = processPlane<float>(
+                stats = d->process_plane_fn_float(
                     static_cast<const float*>(srcp),
                     static_cast<float*>(dstp),
                     plane_width, plane_height, src_stride, dst_stride,
-                    d->min_area, 1.0f, d->use_8_neighbors
+                    d->min_area, 1.0f,
+                    std::nullopt
                 );
             }
             
@@ -329,7 +342,7 @@ static const VSFrame *VS_CC relFilterGetFrame(int n, int activationReason, void 
         auto dst = vsapi->newVideoFrame(fi, width, height, src, core);
 
         std::vector<ComponentStats> plane_stats;
-
+        
         for (auto plane = 0; plane < fi->numPlanes; plane++) {
             const void *srcp = vsapi->getReadPtr(src, plane);
             auto src_stride = vsapi->getStride(src, plane);
@@ -343,27 +356,30 @@ static const VSFrame *VS_CC relFilterGetFrame(int n, int activationReason, void 
             
             if (fi->sampleType == stInteger) {
                 if (fi->bitsPerSample == 8) {
-                    stats = processPlane<uint8_t>(
+                    stats = d->process_plane_fn_uint8(
                         static_cast<const uint8_t*>(srcp),
                         static_cast<uint8_t*>(dstp),
                         plane_width, plane_height, src_stride, dst_stride,
-                        0, static_cast<uint8_t>(255), d->use_8_neighbors, d->percentage
+                        0, static_cast<uint8_t>(255),
+                        d->percentage
                     );
-                } else{
+                } else {
                     auto max_value = static_cast<uint16_t>((1 << fi->bitsPerSample) - 1);
-                    stats = processPlane<uint16_t>(
+                    stats = d->process_plane_fn_uint16(
                         static_cast<const uint16_t*>(srcp),
                         static_cast<uint16_t*>(dstp),
                         plane_width, plane_height, src_stride, dst_stride,
-                        0, max_value, d->use_8_neighbors, d->percentage
+                        0, max_value,
+                        d->percentage
                     );
                 }
             } else if (fi->sampleType == stFloat) {
-                stats = processPlane<float>(
+                stats = d->process_plane_fn_float(
                     static_cast<const float*>(srcp),
                     static_cast<float*>(dstp),
                     plane_width, plane_height, src_stride, dst_stride,
-                    0, 1.0f, d->use_8_neighbors, d->percentage
+                    0, 1.0f,
+                    d->percentage
                 );
             }
             
@@ -401,23 +417,32 @@ static auto VS_CC relFilterFree(void *instanceData, [[maybe_unused]] VSCore *cor
     free(d);
 }
 
+template<typename FilterData>
+static bool validateInput(const VSMap *in, VSMap *out, const VSAPI *vsapi, FilterData &d) {
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
+    auto vi = vsapi->getVideoInfo(d.node);
+
+    if (!vsh::isConstantVideoFormat(vi)) {
+        vsapi->mapSetError(out, "Filter: only clips with constant format are accepted");
+        vsapi->freeNode(d.node);
+        return false;
+    }
+
+    if (!(((vi->format.bitsPerSample == 8 || vi->format.bitsPerSample == 16) && vi->format.sampleType == stInteger) || (vi->format.bitsPerSample==32 && vi->format.sampleType == stFloat))) {
+        vsapi->mapSetError(out, "Filter: only 8-16 bit integer or 32 bit float input are accepted");
+        vsapi->freeNode(d.node);
+        return false;
+    }
+    
+    return true;
+}
+
 static auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) {
     AreaFilterData d;
     AreaFilterData *data;
     auto err = 0;
 
-    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
-    auto vi = vsapi->getVideoInfo(d.node);
-
-    if (!vsh::isConstantVideoFormat(vi)) {
-        vsapi->mapSetError(out, "AreaFilter: only clips with constant format are accepted");
-        vsapi->freeNode(d.node);
-        return;
-    }
-
-    if (!(((vi->format.bitsPerSample == 8 || vi->format.bitsPerSample == 16) && vi->format.sampleType == stInteger) || (vi->format.bitsPerSample==32 && vi->format.sampleType == stFloat))){
-        vsapi->mapSetError(out, "AreaFilter: only 8-16 bit integer or 32 bit float input are accepted");
-        vsapi->freeNode(d.node);
+    if (!validateInput(in, out, vsapi, d)) {
         return;
     }
 
@@ -434,15 +459,25 @@ static auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]]
         return;
     }
     
-    d.use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
+    bool use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
     if (err)
-        d.use_8_neighbors = false;
+        use_8_neighbors = false;
+    
+    if (use_8_neighbors) {
+        d.process_plane_fn_uint8 = processPlane8<uint8_t>;
+        d.process_plane_fn_uint16 = processPlane8<uint16_t>;
+        d.process_plane_fn_float = processPlane8<float>;
+    } else {
+        d.process_plane_fn_uint8 = processPlane4<uint8_t>;
+        d.process_plane_fn_uint16 = processPlane4<uint16_t>;
+        d.process_plane_fn_float = processPlane4<float>;
+    }
 
     data = static_cast<AreaFilterData*>(malloc(sizeof(d)));
     *data = d;
     
     VSFilterDependency deps[] = {{d.node, rpStrictSpatial}};
-    vsapi->createVideoFilter(out, "AreaFilter", vi, areaFilterGetFrame, areaFilterFree, fmParallel, deps, 1, data, core);
+    vsapi->createVideoFilter(out, "AreaFilter", vsapi->getVideoInfo(d.node), areaFilterGetFrame, areaFilterFree, fmParallel, deps, 1, data, core);
 }
 
 static auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) {
@@ -450,18 +485,7 @@ static auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] 
     RelFilterData *data;
     auto err = 0;
 
-    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
-    auto vi = vsapi->getVideoInfo(d.node);
-
-    if (!vsh::isConstantVideoFormat(vi)) {
-        vsapi->mapSetError(out, "RelFilter: only clips with constant format are accepted");
-        vsapi->freeNode(d.node);
-        return;
-    }
-
-    if (!(((vi->format.bitsPerSample == 8 || vi->format.bitsPerSample == 16) && vi->format.sampleType == stInteger) || (vi->format.bitsPerSample==32 && vi->format.sampleType == stFloat))){
-        vsapi->mapSetError(out, "RelFilter: only 8-16 bit integer or 32 bit float input are accepted");
-        vsapi->freeNode(d.node);
+    if (!validateInput(in, out, vsapi, d)) {
         return;
     }
 
@@ -478,15 +502,25 @@ static auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] 
         return;
     }
     
-    d.use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
+    bool use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
     if (err)
-        d.use_8_neighbors = false;
+        use_8_neighbors = false;
+    
+    if (use_8_neighbors) {
+        d.process_plane_fn_uint8 = processPlane8<uint8_t>;
+        d.process_plane_fn_uint16 = processPlane8<uint16_t>;
+        d.process_plane_fn_float = processPlane8<float>;
+    } else {
+        d.process_plane_fn_uint8 = processPlane4<uint8_t>;
+        d.process_plane_fn_uint16 = processPlane4<uint16_t>;
+        d.process_plane_fn_float = processPlane4<float>;
+    }
 
     data = static_cast<RelFilterData*>(malloc(sizeof(d)));
     *data = d;
     
     VSFilterDependency deps[] = {{d.node, rpStrictSpatial}};
-    vsapi->createVideoFilter(out, "RelFilter", vi, relFilterGetFrame, relFilterFree, fmParallel, deps, 1, data, core);
+    vsapi->createVideoFilter(out, "RelFilter", vsapi->getVideoInfo(d.node), relFilterGetFrame, relFilterFree, fmParallel, deps, 1, data, core);
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
