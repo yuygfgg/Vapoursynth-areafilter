@@ -3,6 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <optional>
+#include <type_traits>
 #include "VapourSynth4.h"
 #include "VSHelper4.h"
 
@@ -98,7 +99,7 @@ struct NeighborhoodTraits<false> {
 };
 
 template<bool use_8_neighbors, typename T>
-static ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) {
+static inline ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) noexcept {
     auto src_stride_elements = src_stride / sizeof(T);
     auto dst_stride_elements = dst_stride / sizeof(T);
         
@@ -242,16 +243,16 @@ static ComponentStats processPlaneImpl(const T* VS_RESTRICT srcp, T* VS_RESTRICT
 }
 
 template<typename T>
-static ComponentStats processPlane8(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) {
+static inline ComponentStats processPlane8(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) noexcept {
     return processPlaneImpl<true>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
 }
 
 template<typename T>
-static ComponentStats processPlane4(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) {
+static inline ComponentStats processPlane4(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value, std::optional<float> keep_percentage = std::nullopt) noexcept {
     return processPlaneImpl<false>(srcp, dstp, width, height, src_stride, dst_stride, min_area, fg_value, keep_percentage);
 }
 
-static const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+static inline const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) noexcept {
     auto d = static_cast<AreaFilterData*>(instanceData);
 
     if (activationReason == arInitial) {
@@ -328,7 +329,7 @@ static const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void
     return nullptr;
 }
 
-static const VSFrame *VS_CC relFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+static inline const VSFrame *VS_CC relFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) noexcept {
     auto d = static_cast<RelFilterData*>(instanceData);
 
     if (activationReason == arInitial) {
@@ -405,31 +406,39 @@ static const VSFrame *VS_CC relFilterGetFrame(int n, int activationReason, void 
     return nullptr;
 }
 
-static auto VS_CC areaFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi) {
+static inline auto VS_CC areaFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi) noexcept {
     auto d = static_cast<AreaFilterData*>(instanceData);
     vsapi->freeNode(d->node);
     free(d);
 }
 
-static auto VS_CC relFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi) {
+static inline auto VS_CC relFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi)noexcept  {
     auto d = static_cast<RelFilterData*>(instanceData);
     vsapi->freeNode(d->node);
     free(d);
 }
 
 template<typename FilterData>
-static bool validateInput(const VSMap *in, VSMap *out, const VSAPI *vsapi, FilterData &d) {
+static inline auto validateInput(const VSMap *in, VSMap *out, const VSAPI *vsapi, FilterData &d) noexcept {
     d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     auto vi = vsapi->getVideoInfo(d.node);
 
     if (!vsh::isConstantVideoFormat(vi)) {
-        vsapi->mapSetError(out, "Filter: only clips with constant format are accepted");
+        if constexpr (std::is_same_v<FilterData, AreaFilterData>){
+            vsapi->mapSetError(out, "AreaFilter: only clips with constant format are accepted");
+        } else {
+            vsapi->mapSetError(out, "RelFilter: only clips with constant format are accepted");
+        }
         vsapi->freeNode(d.node);
         return false;
     }
 
     if (!(((vi->format.bitsPerSample == 8 || vi->format.bitsPerSample == 16) && vi->format.sampleType == stInteger) || (vi->format.bitsPerSample==32 && vi->format.sampleType == stFloat))) {
-        vsapi->mapSetError(out, "Filter: only 8-16 bit integer or 32 bit float input are accepted");
+        if constexpr (std::is_same_v<FilterData, AreaFilterData>){
+            vsapi->mapSetError(out, "AreaFilter: only 8-16 bit integer or 32 bit float input are accepted");
+        } else {
+            vsapi->mapSetError(out, "RelFilter: only 8-16 bit integer or 32 bit float input are accepted");
+        }
         vsapi->freeNode(d.node);
         return false;
     }
@@ -437,7 +446,7 @@ static bool validateInput(const VSMap *in, VSMap *out, const VSAPI *vsapi, Filte
     return true;
 }
 
-static auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) {
+static inline auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) noexcept {
     AreaFilterData d;
     AreaFilterData *data;
     auto err = 0;
@@ -459,7 +468,7 @@ static auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]]
         return;
     }
     
-    bool use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
+    auto use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
     if (err)
         use_8_neighbors = false;
     
@@ -480,7 +489,7 @@ static auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]]
     vsapi->createVideoFilter(out, "AreaFilter", vsapi->getVideoInfo(d.node), areaFilterGetFrame, areaFilterFree, fmParallel, deps, 1, data, core);
 }
 
-static auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) {
+static inline auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) noexcept {
     RelFilterData d;
     RelFilterData *data;
     auto err = 0;
@@ -502,7 +511,7 @@ static auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] 
         return;
     }
     
-    bool use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
+    auto use_8_neighbors = !!vsapi->mapGetInt(in, "neighbors8", 0, &err);
     if (err)
         use_8_neighbors = false;
     
@@ -525,6 +534,6 @@ static auto VS_CC relFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] 
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
     vspapi->configPlugin("com.yuygfgg.areafilter", "areafilter", "VapourSynth Area Filter Plugin", VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
-    vspapi->registerFunction("Filter", "clip:vnode;min_area:int;neighbors8:int:opt;", "clip:vnode;", areaFilterCreate, NULL, plugin);
+    vspapi->registerFunction("AreaFilter", "clip:vnode;min_area:int;neighbors8:int:opt;", "clip:vnode;", areaFilterCreate, NULL, plugin);
     vspapi->registerFunction("RelFilter", "clip:vnode;percentage:float;neighbors8:int:opt;", "clip:vnode;", relFilterCreate, NULL, plugin);
 }
