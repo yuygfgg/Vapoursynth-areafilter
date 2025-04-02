@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <vector>
-#include <unordered_map>
 #include "VapourSynth4.h"
 #include "VSHelper4.h"
 
@@ -15,30 +14,25 @@ private:
     std::vector<int> size;
 
 public:
-    DisjointSet(int max_elements) {
-        parent.resize(max_elements);
-        size.resize(max_elements, 1);
-
-        for (int i = 0; i < max_elements; i++) {
+    DisjointSet(int max_elements) : parent(max_elements), size(max_elements, 1) {
+        for (auto i = 0; i < max_elements; i++)
             parent[i] = i;
-        }
     }
-
-    int find(int x) {
-        if (parent[x] != x) {
-            parent[x] = find(parent[x]);
+    
+    auto find(int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
         }
-        return parent[x];
+        return x;
     }
-
-    void merge(int x, int y) {
+    
+    auto merge(int x, int y) {
         auto root_x = find(x);
         auto root_y = find(y);
-
-        if (root_x == root_y) {
+        if (root_x == root_y) 
             return;
-        }
-
+    
         if (size[root_x] < size[root_y]) {
             parent[root_x] = root_y;
             size[root_y] += size[root_x];
@@ -47,110 +41,93 @@ public:
             size[root_x] += size[root_y];
         }
     }
-
-    int getSize(int x) {
-        return size[find(x)];
-    }
+    auto getSize(int x) { return size[find(x)]; }
 };
-
+    
 template<typename T>
-static void processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value) {
-    ptrdiff_t src_stride_elements = src_stride / sizeof(T);
-    ptrdiff_t dst_stride_elements = dst_stride / sizeof(T);
-    
+static auto processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp, int width, int height, ptrdiff_t src_stride, ptrdiff_t dst_stride, int min_area, T fg_value) {
+    auto src_stride_elements = src_stride / sizeof(T);
+    auto dst_stride_elements = dst_stride / sizeof(T);
+        
     std::vector<int> labels(width * height, 0);
-    DisjointSet ds(width * height / 4 + 2);
-    
+    DisjointSet ds(width * height + 2);
+
+    struct NeighborOffset { int dy, dx; };
+    constexpr NeighborOffset neighbors[] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}};
+        
     auto next_label = 1;
     
     for (auto y = 0; y < height; y++) {
         for (auto x = 0; x < width; x++) {
-            if (srcp[y * src_stride_elements + x] == fg_value) {
-                int neighbors[4] = {0, 0, 0, 0};
-                auto num_neighbors = 0;
+            if (srcp[y * src_stride_elements + x] != fg_value)
+                continue;
                 
-                if (y > 0 && x > 0 && srcp[(y-1) * src_stride_elements + (x-1)] == fg_value) {
-                    neighbors[num_neighbors++] = labels[(y-1) * width + (x-1)];
-                }
-                
-                if (y > 0 && srcp[(y-1) * src_stride_elements + x] == fg_value) {
-                    neighbors[num_neighbors++] = labels[(y-1) * width + x];
-                }
-                
-                if (y > 0 && x < width-1 && srcp[(y-1) * src_stride_elements + (x+1)] == fg_value) {
-                    neighbors[num_neighbors++] = labels[(y-1) * width + (x+1)];
-                }
-                
-                if (x > 0 && srcp[y * src_stride_elements + (x-1)] == fg_value) {
-                    neighbors[num_neighbors++] = labels[y * width + (x-1)];
-                }
-                
-                auto min_label = 0;
-                for (auto i = 0; i < num_neighbors; i++) {
-                    if (neighbors[i] > 0) {
-                        if (min_label == 0 || neighbors[i] < min_label) {
-                            min_label = neighbors[i];
-                        }
+            auto min_label = 0;
+            int valid_neighbors[4] = {0};
+            auto num_valid = 0;
+    
+            for (auto& off : neighbors) {
+                auto ny = y + off.dy;
+                auto nx = x + off.dx;
+                if (ny >= 0 && nx >= 0 && ny < height && nx < width && srcp[ny * src_stride_elements + nx] == fg_value) {
+                    auto neighbor_label = labels[ny * width + nx];
+                    if (neighbor_label > 0) {
+                        valid_neighbors[num_valid++] = neighbor_label;
+                        if (min_label == 0 || neighbor_label < min_label)
+                            min_label = neighbor_label;
                     }
                 }
-                
-                if (min_label == 0) {
-                    labels[y * width + x] = next_label++;
-                } else {
-                    labels[y * width + x] = min_label;
-                    
-                    for (auto i = 0; i < num_neighbors; i++) {
-                        if (neighbors[i] > 0 && neighbors[i] != min_label) {
-                            ds.merge(min_label, neighbors[i]);
-                        }
-                    }
+            }
+    
+            if (min_label == 0) {
+                labels[y * width + x] = next_label++;
+            } 
+            else {
+                labels[y * width + x] = min_label;
+                for (auto i = 0; i < num_valid; i++) {
+                    if (valid_neighbors[i] != min_label)
+                        ds.merge(min_label, valid_neighbors[i]);
                 }
             }
         }
     }
     
-    std::unordered_map<int, int> component_sizes;
+    auto max_label = next_label - 1;
+    std::vector<int> component_sizes(max_label + 1, 0);
+    for (auto i = 0; i < width * height; i++) {
+        if (labels[i] > 0) {
+            auto root = ds.find(labels[i]);
+            if (root <= max_label)
+                component_sizes[root]++;
+        }
+    }
+    
+    for (auto y = 0; y < height; y++) {
+        auto row = reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(dstp) + y * dst_stride);
+        memset(row, 0, width * sizeof(T));
+    }
     
     for (auto y = 0; y < height; y++) {
         for (auto x = 0; x < width; x++) {
             auto label = labels[y * width + x];
-            if (label > 0) {
-                component_sizes[ds.find(label)]++;
-            }
-        }
-    }
-    
-    for (auto y = 0; y < height; y++) {
-        for (auto x = 0; x < width; x++) {
-            dstp[y * dst_stride_elements + x] = 0;
-        }
-    }
-    
-    for (auto y = 0; y < height; y++) {
-        for (auto x = 0; x < width; x++) {
-            int label = labels[y * width + x];
-            if (label > 0) {
-                auto root = ds.find(label);
-                if (component_sizes[root] >= min_area) {
-                    dstp[y * dst_stride_elements + x] = fg_value;
-                }
-            }
+            if (label > 0 && component_sizes[ds.find(label)] >= min_area)
+                dstp[y * dst_stride_elements + x] = fg_value;
         }
     }
 }
 
 static const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void *instanceData, [[maybe_unused]] void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    auto *d = (AreaFilterData *)instanceData;
+    auto d = (AreaFilterData *)instanceData;
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
-        auto *src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        auto *fi = vsapi->getVideoFrameFormat(src);
+        auto src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        auto fi = vsapi->getVideoFrameFormat(src);
         auto height = vsapi->getFrameHeight(src, 0);
         auto width = vsapi->getFrameWidth(src, 0);
 
-        auto *dst = vsapi->newVideoFrame(fi, width, height, src, core);
+        auto dst = vsapi->newVideoFrame(fi, width, height, src, core);
 
         for (auto plane = 0; plane < fi->numPlanes; plane++) {
             const void *srcp = vsapi->getReadPtr(src, plane);
@@ -192,23 +169,22 @@ static const VSFrame *VS_CC areaFilterGetFrame(int n, int activationReason, void
         
         return dst;
     }
-
     return NULL;
 }
 
-static void VS_CC areaFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi) {
-    AreaFilterData *d = (AreaFilterData *)instanceData;
+static auto VS_CC areaFilterFree(void *instanceData, [[maybe_unused]] VSCore *core, const VSAPI *vsapi) {
+    auto d = (AreaFilterData *)instanceData;
     vsapi->freeNode(d->node);
     free(d);
 }
 
-static void VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) {
+static auto VS_CC areaFilterCreate(const VSMap *in, VSMap *out, [[maybe_unused]] void *userData, VSCore *core, const VSAPI *vsapi) {
     AreaFilterData d;
     AreaFilterData *data;
-    int err = 0;
+    auto err = 0;
 
     d.node = vsapi->mapGetNode(in, "clip", 0, 0);
-    auto *vi = vsapi->getVideoInfo(d.node);
+    auto vi = vsapi->getVideoInfo(d.node);
 
     if (!vsh::isConstantVideoFormat(vi)) {
         vsapi->mapSetError(out, "AreaFilter: only clips with constant format are accepted");
