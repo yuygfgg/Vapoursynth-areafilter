@@ -42,4 +42,3 @@ Both filters output the following frame properties:
 meson build
 ninja -C build install
 ```
-\
