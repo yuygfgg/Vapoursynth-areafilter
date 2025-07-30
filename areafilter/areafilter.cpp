@@ -102,7 +102,7 @@ template <> struct NeighborhoodTraits<false> {
 };
 
 template <bool use_8_neighbors, bool use_percentage, typename T>
-static inline auto processPlane(auto VS_RESTRICT srcp, auto VS_RESTRICT dstp,
+static inline auto processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp,
                                 auto width, auto height, auto src_stride,
                                 auto dst_stride, auto min_area, auto fg_value,
                                 auto percentage = 0.0f) noexcept {
