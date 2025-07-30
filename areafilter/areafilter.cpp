@@ -89,7 +89,7 @@ constexpr NeighborOffset FOUR_NEIGHBORS[] = {
 
 constexpr auto FOUR_NEIGHBORS_COUNT = 4;
 
-template <bool use_8_neighbors> struct NeighborhoodTraits;
+template <auto use_8_neighbors> struct NeighborhoodTraits;
 
 template <> struct NeighborhoodTraits<true> {
     static constexpr auto neighbors = EIGHT_NEIGHBORS;
@@ -102,10 +102,10 @@ template <> struct NeighborhoodTraits<false> {
 };
 
 template <bool use_8_neighbors, bool use_percentage, typename T>
-static inline auto processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp,
-                                int width, int height, ptrdiff_t src_stride,
-                                ptrdiff_t dst_stride, int min_area, T fg_value,
-                                float percentage = 0.0f) noexcept {
+static inline auto processPlane(auto VS_RESTRICT srcp, auto VS_RESTRICT dstp,
+                                auto width, auto height, auto src_stride,
+                                auto dst_stride, auto min_area, auto fg_value,
+                                auto percentage = 0.0f) noexcept {
     auto src_stride_elements = src_stride / sizeof(T);
     auto dst_stride_elements = dst_stride / sizeof(T);
 
@@ -263,8 +263,7 @@ processPlaneWrapper(const void* srcp, void* dstp, int width, int height,
         use_percentage ? percentage : 0.0f);
 }
 
-static inline void setFrameProperties(VSFrame* dst, const ComponentStats& stats,
-                                      const VSAPI* vsapi) {
+static inline void setFrameProperties(auto dst, auto stats, auto vsapi) {
     vsapi->mapSetInt(vsapi->getFramePropertiesRW(dst), "ComponentCount",
                      stats.component_count, maReplace);
 
@@ -276,9 +275,9 @@ static inline void setFrameProperties(VSFrame* dst, const ComponentStats& stats,
 }
 
 static inline const VSFrame* VS_CC
-areaFilterGetFrame(int n, int activationReason, void* instanceData,
-                   [[maybe_unused]] void** frameData, VSFrameContext* frameCtx,
-                   VSCore* core, const VSAPI* vsapi) noexcept {
+areaFilterGetFrame(auto n, auto activationReason, auto instanceData,
+                   [[maybe_unused]] auto frameData, auto frameCtx, auto core,
+                   auto vsapi) noexcept {
     auto d = static_cast<FilterData*>(instanceData);
 
     if (activationReason == arInitial) {
@@ -321,9 +320,9 @@ areaFilterGetFrame(int n, int activationReason, void* instanceData,
 }
 
 static inline const VSFrame* VS_CC
-relFilterGetFrame(int n, int activationReason, void* instanceData,
-                  [[maybe_unused]] void** frameData, VSFrameContext* frameCtx,
-                  VSCore* core, const VSAPI* vsapi) noexcept {
+relFilterGetFrame(auto n, auto activationReason, auto instanceData,
+                  [[maybe_unused]] auto frameData, auto frameCtx, auto core,
+                  auto vsapi) noexcept {
     auto d = static_cast<FilterData*>(instanceData);
 
     if (activationReason == arInitial) {
@@ -365,17 +364,16 @@ relFilterGetFrame(int n, int activationReason, void* instanceData,
     return nullptr;
 }
 
-static inline auto VS_CC filterFree(void* instanceData,
-                                    [[maybe_unused]] VSCore* core,
-                                    const VSAPI* vsapi) noexcept {
+static inline auto VS_CC filterFree(auto instanceData,
+                                    [[maybe_unused]] auto core,
+                                    auto vsapi) noexcept {
     auto d = static_cast<FilterData*>(instanceData);
     vsapi->freeNode(d->node);
     free(d);
 }
 
-static inline auto validateInput(const VSMap* in, VSMap* out,
-                                 const VSAPI* vsapi, FilterData& d,
-                                 const char* filter_name) noexcept {
+static inline auto validateInput(auto in, auto out, auto vsapi, auto& d,
+                                 auto filter_name) noexcept {
     d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     auto vi = vsapi->getVideoInfo(d.node);
 
@@ -405,7 +403,7 @@ static inline auto validateInput(const VSMap* in, VSMap* out,
     return true;
 }
 
-static inline void setupCommonFilterData(FilterData& d, const VSAPI* vsapi) {
+static inline void setupCommonFilterData(auto& d, auto vsapi) {
     auto vi = vsapi->getVideoInfo(d.node);
     d.sample_type = static_cast<VSSampleType>(vi->format.sampleType);
     d.bits_per_sample = vi->format.bitsPerSample;
@@ -427,8 +425,8 @@ static inline void setupCommonFilterData(FilterData& d, const VSAPI* vsapi) {
     }
 }
 
-static inline void selectProcessFunction(FilterData& d, bool use_8_neighbors,
-                                         bool use_percentage) {
+static inline void selectProcessFunction(auto& d, auto use_8_neighbors,
+                                         auto use_percentage) {
     if (d.sample_type == stInteger) {
         if (d.bits_per_sample == 8) {
             if (use_8_neighbors) {
@@ -512,10 +510,9 @@ static inline auto VS_CC areaFilterCreate(const VSMap* in, VSMap* out,
                              1, data, core);
 }
 
-static inline auto VS_CC relFilterCreate(const VSMap* in, VSMap* out,
-                                         [[maybe_unused]] void* userData,
-                                         VSCore* core,
-                                         const VSAPI* vsapi) noexcept {
+static inline auto VS_CC relFilterCreate(auto in, auto out,
+                                         [[maybe_unused]] auto userData,
+                                         auto core, auto vsapi) noexcept {
     FilterData d;
     FilterData* data;
     auto err = 0;
