@@ -1,6 +1,7 @@
 #include "VSHelper4.h"
 #include "VapourSynth4.h"
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <format>
 #include <vector>
