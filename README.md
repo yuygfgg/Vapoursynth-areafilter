@@ -9,7 +9,7 @@ VapourSynth plugin for processing binary images by filtering connected component
 Removes connected components with an area below a specified threshold:
 
 ```python
-core.areafilter.Filter(clip clip, int min_area, neighbors8=False)
+core.areafilter.AreaFilter(clip clip, int min_area, neighbors8=False)
 ```
 
 Parameters:
