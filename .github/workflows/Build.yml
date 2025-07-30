@@ -29,9 +29,9 @@ jobs:
         shell: bash
         run: |
           git clone https://github.com/vapoursynth/vapoursynth --depth=1
-          cp vapoursynth/include/*.h PSI
-          sed -i -e '/#include <V/y|<>|""|' PSI/PSI.cpp
-          ls -la PSI
+          cp vapoursynth/include/*.h areafilter
+          sed -i -e '/#include <V/y|<>|""|' areafilter/areafilter.cpp
+          ls -la areafilter
 
       - name: Setup MS dev commands
         uses: ilammy/msvc-dev-cmd@v1
@@ -121,9 +121,9 @@ jobs:
       - name: Download VS headers and patch header location
         run: |
           git clone https://github.com/vapoursynth/vapoursynth --depth=1
-          cp vapoursynth/include/*.h PSI
-          sed -i -e '/#include <V/y|<>|""|' PSI/PSI.cpp
-          ls -la PSI
+          cp vapoursynth/include/*.h areafilter
+          sed -i -e '/#include <V/y|<>|""|' areafilter/areafilter.cpp
+          ls -la areafilter
 
       - name: Create fake VapourSynth pkg-config file
         run: |
@@ -208,9 +208,9 @@ jobs:
       - name: Download VS headers and patch header location
         run: |
           git clone https://github.com/vapoursynth/vapoursynth --depth=1
-          cp vapoursynth/include/*.h PSI
-          sed -i '' -e '/#include <V/y|<>|""|' PSI/PSI.cpp
-          ls -la PSI
+          cp vapoursynth/include/*.h areafilter
+          sed -i '' -e '/#include <V/y|<>|""|' areafilter/areafilter.cpp
+          ls -la areafilter
 
       - name: Create fake VapourSynth pkg-config file
         run: |
