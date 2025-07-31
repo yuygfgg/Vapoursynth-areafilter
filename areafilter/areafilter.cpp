@@ -1,8 +1,8 @@
 #include "VSHelper4.h"
 #include "VapourSynth4.h"
 #include <algorithm>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <vector>
 
@@ -264,11 +264,11 @@ processPlaneWrapper(const void* srcp, void* dstp, int width, int height,
         use_percentage ? percentage : 0.0f);
 }
 
-static inline void setFrameProperties(auto dst, auto stats, auto vsapi) {
+static inline auto setFrameProperties(auto dst, auto stats, auto vsapi) {
     vsapi->mapSetInt(vsapi->getFramePropertiesRW(dst), "ComponentCount",
                      stats.component_count, maReplace);
 
-    for (int i = 0; i <= 20; i++) {
+    for (auto i = 0; i <= 20; i++) {
         auto propName = std::format("SizePercentile{}", i * 5);
         vsapi->mapSetInt(vsapi->getFramePropertiesRW(dst), propName.c_str(),
                          stats.size_percentiles[i], maReplace);
@@ -387,16 +387,17 @@ static inline auto validateInput(auto in, auto out, auto vsapi, auto& d,
         return false;
     }
 
-    if (!(((vi->format.bitsPerSample == 8 || vi->format.bitsPerSample == 16) &&
+    if (!((vi->format.bitsPerSample >= 8 && vi->format.bitsPerSample <= 16 &&
            vi->format.sampleType == stInteger) ||
           (vi->format.bitsPerSample == 32 &&
            vi->format.sampleType == stFloat))) {
         vsapi->mapSetError(
-            out,
-            std::format(
-                "{}: only 8-16 bit integer or 32 bit float input are accepted",
-                filter_name)
-                .c_str());
+            out, std::format("{}: only 8-16 bit integer or 32 bit float input "
+                             "are accepted, got {} bit {}",
+                             filter_name, vi->format.bitsPerSample,
+                             vi->format.sampleType == stInteger ? "integer"
+                                                                : "float")
+                     .c_str());
         vsapi->freeNode(d.node);
         return false;
     }
@@ -490,7 +491,8 @@ static inline auto VS_CC areaFilterCreate(const VSMap* in, VSMap* out,
 
     if (d.min_area <= 0) {
         vsapi->mapSetError(
-            out, std::format("{}: min_area must be greater than 0", filter_name)
+            out, std::format("{}: min_area must be greater than 0, got {}",
+                             filter_name, d.min_area)
                      .c_str());
         vsapi->freeNode(d.node);
         return;
@@ -529,17 +531,19 @@ static inline auto VS_CC relFilterCreate(auto in, auto out,
     d.percentage =
         static_cast<float>(vsapi->mapGetFloat(in, "percentage", 0, &err));
     if (err) {
-        vsapi->mapSetError(
-            out,
-            std::format("{}: percentage must be set", filter_name).c_str());
+        vsapi->mapSetError(out,
+                           std::format("{}: percentage must be set, got {}",
+                                       filter_name, d.percentage)
+                               .c_str());
         vsapi->freeNode(d.node);
         return;
     }
 
     if (d.percentage <= 0.0f || d.percentage > 100.0f) {
         vsapi->mapSetError(
-            out, std::format("{}: percentage must be in the range (0, 100]",
-                             filter_name)
+            out, std::format("{}: percentage must be in the range (0, 100], "
+                             "got {}",
+                             filter_name, d.percentage)
                      .c_str());
         vsapi->freeNode(d.node);
         return;
