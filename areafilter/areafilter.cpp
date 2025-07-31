@@ -568,7 +568,7 @@ VS_EXTERNAL_API(void)
 VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
     vspapi->configPlugin("com.yuygfgg.areafilter", "areafilter",
                          "VapourSynth Area Filter Plugin",
-                         VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0,
+                         VS_MAKE_VERSION(3, 0), VAPOURSYNTH_API_VERSION, 0,
                          plugin);
     vspapi->registerFunction("AreaFilter",
                              "clip:vnode;min_area:int;neighbors8:int:opt;",

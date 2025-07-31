@@ -2,6 +2,7 @@ project('areafilter', 'cpp',
   default_options: ['buildtype=release', 'warning_level=2', 'b_lto=true', 'b_ndebug=if-release', 'cpp_std=c++20'],
   license: 'GPL-3.0-or-later',
   meson_version: '>=0.51.0',
+  version: '3.0'
 )
 
 cxx = meson.get_compiler('cpp')
