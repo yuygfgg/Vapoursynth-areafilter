@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <memory>
 #include <vector>
 
 typedef struct {
@@ -32,14 +33,17 @@ typedef struct {
 
 class DisjointSet {
   private:
-    std::vector<int> parent;
-    std::vector<int> size;
+    std::unique_ptr<int[]> parent;
+    std::unique_ptr<int[]> size;
 
   public:
     DisjointSet(int max_elements)
-        : parent(max_elements), size(max_elements, 1) {
-        for (auto i = 0; i < max_elements; i++)
+        : parent(std::make_unique<int[]>(max_elements)),
+          size(std::make_unique<int[]>(max_elements)) {
+        for (auto i = 0; i < max_elements; i++) {
             parent[i] = i;
+            size[i] = 1;
+        }
     }
 
     auto find(int x) {
@@ -111,8 +115,12 @@ static inline auto processPlane(const T* VS_RESTRICT srcp, T* VS_RESTRICT dstp,
     auto src_stride_elements = src_stride / sizeof(T);
     auto dst_stride_elements = dst_stride / sizeof(T);
 
-    std::vector<int> labels(width * height, 0);
-    DisjointSet ds(width * height + 2);
+    std::unique_ptr<int[]> labels =
+        std::make_unique<int[]>(static_cast<size_t>(width) * height);
+    std::memset(labels.get(), 0,
+                static_cast<size_t>(width) * height * sizeof(int));
+    auto max_labels = (static_cast<size_t>(width) * height) / 2 + 2;
+    DisjointSet ds(max_labels);
 
     constexpr auto neighbors = NeighborhoodTraits<use_8_neighbors>::neighbors;
     constexpr auto num_neighbors = NeighborhoodTraits<use_8_neighbors>::count;
