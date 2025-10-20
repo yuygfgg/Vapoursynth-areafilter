@@ -26,6 +26,7 @@ typedef struct {
     int bits_per_sample;
     uint16_t max_value;
     float fg_value;
+    bool write_props;
     ProcessPlaneFn process_plane_fn;
 } FilterData;
 
@@ -309,7 +310,7 @@ areaFilterGetFrame(auto n, auto activationReason, auto instanceData,
             plane_stats.push_back(stats);
         }
 
-        if (!plane_stats.empty()) {
+        if (d->write_props && !plane_stats.empty()) {
             setFrameProperties(dst, plane_stats[0], vsapi);
         }
 
@@ -354,7 +355,7 @@ relFilterGetFrame(auto n, auto activationReason, auto instanceData,
             plane_stats.push_back(stats);
         }
 
-        if (!plane_stats.empty()) {
+        if (d->write_props && !plane_stats.empty()) {
             setFrameProperties(dst, plane_stats[0], vsapi);
         }
 
@@ -502,6 +503,10 @@ static inline auto VS_CC areaFilterCreate(const VSMap* in, VSMap* out,
     if (err)
         use_8_neighbors = false;
 
+    d.write_props = !!vsapi->mapGetInt(in, "write_props", 0, &err);
+    if (err)
+        d.write_props = true;
+
     selectProcessFunction(d, use_8_neighbors, false);
 
     data = static_cast<FilterData*>(malloc(sizeof(d)));
@@ -553,6 +558,10 @@ static inline auto VS_CC relFilterCreate(auto in, auto out,
     if (err)
         use_8_neighbors = false;
 
+    d.write_props = !!vsapi->mapGetInt(in, "write_props", 0, &err);
+    if (err)
+        d.write_props = true;
+
     selectProcessFunction(d, use_8_neighbors, true);
 
     data = static_cast<FilterData*>(malloc(sizeof(d)));
@@ -570,10 +579,12 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
                          "VapourSynth Area Filter Plugin",
                          VS_MAKE_VERSION(3, 0), VAPOURSYNTH_API_VERSION, 0,
                          plugin);
-    vspapi->registerFunction("AreaFilter",
-                             "clip:vnode;min_area:int;neighbors8:int:opt;",
-                             "clip:vnode;", areaFilterCreate, NULL, plugin);
-    vspapi->registerFunction("RelFilter",
-                             "clip:vnode;percentage:float;neighbors8:int:opt;",
-                             "clip:vnode;", relFilterCreate, NULL, plugin);
+    vspapi->registerFunction(
+        "AreaFilter",
+        "clip:vnode;min_area:int;neighbors8:int:opt;write_props:int:opt;",
+        "clip:vnode;", areaFilterCreate, NULL, plugin);
+    vspapi->registerFunction(
+        "RelFilter",
+        "clip:vnode;percentage:float;neighbors8:int:opt;write_props:int:opt;",
+        "clip:vnode;", relFilterCreate, NULL, plugin);
 }
